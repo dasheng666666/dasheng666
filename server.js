@@ -479,12 +479,21 @@ input:focus,textarea:focus,select:focus{
 }
 .internal-card:hover{transform:translateY(-2px);box-shadow:0 20px 52px rgba(16,24,40,.1)}
 .internal-cover{
-  position:relative;aspect-ratio:16/9;display:grid;place-items:center;
+  position:relative;aspect-ratio:16/9;display:grid;place-items:center;overflow:hidden;
   background:
     radial-gradient(circle at 25% 25%,rgba(124,112,255,.34),transparent 30%),
     linear-gradient(145deg,#121936,#343778 68%,#5d4ba9);
   color:#fff
 }
+.internal-cover-img{
+  position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;z-index:1
+}
+.internal-cover-shade{
+  position:absolute;inset:0;z-index:1;
+  background:linear-gradient(to bottom,rgba(8,12,28,.04),rgba(8,12,28,.16));
+  pointer-events:none
+}
+.internal-type,.internal-pin,.internal-file-icon{z-index:2}
 .internal-file-icon{
   min-width:64px;height:64px;padding:0 12px;border-radius:17px;display:grid;place-items:center;
   background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.28);
@@ -960,12 +969,16 @@ function internalCard(item){
   const preview=isPreviewable(item)
     ? '<button class="mini primary" onclick="event.stopPropagation();openInternalView(\\''+item.id+'\\',\\''+IE(item.title).replace(/'/g,"&#39;")+'\\',\\''+item.resourceKind+'\\')">'+(item.resourceKind==="video"?"播放":"在线查看")+'</button>'
     : '';
+  const cover=item.hasCover
+    ? '<img class="internal-cover-img" src="/internal-resource/cover/'+encodeURIComponent(item.id)+'" alt="" loading="lazy"><span class="internal-cover-shade"></span>'
+    : '';
 
   return '<article class="internal-card">'+
     '<div class="internal-cover">'+
+      cover+
       '<span class="internal-type">'+IE(item.category||"内部资料")+'</span>'+
       (item.pinned?'<span class="internal-pin">置顶</span>':'')+
-      '<span class="internal-file-icon">'+IE(item.type||"FILE")+'</span>'+
+      (!item.hasCover?'<span class="internal-file-icon">'+IE(item.type||"FILE")+'</span>':'')+
     '</div>'+
     '<div class="internal-card-body">'+
       '<h3>'+IE(item.title||"未命名资料")+'</h3>'+
@@ -1235,7 +1248,11 @@ const adminHtml = `<!doctype html>
           <textarea name="description" placeholder="填写这份内部资料的简介"></textarea>
         </div>
         <div class="full">
-          <p class="notice">内部资料不使用公开资料区的 2GB 上限，也不限制文件扩展名。大文件会自动分片上传到 Railway Bucket。</p>
+          <p class="notice">内部资料不使用公开资料区的 2GB 上限，也不限制文件扩展名。大文件会自动分片上传到 Railway Bucket。上传视频时会自动截取约 0.3 秒处的画面作为封面。</p>
+          <div id="internalCoverPreviewWrap" class="hidden" style="margin:10px 0 8px">
+            <div class="notice" style="margin-bottom:6px">自动封面预览</div>
+            <img id="internalCoverPreview" alt="" style="width:240px;max-width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:12px;border:1px solid #e4e7ec">
+          </div>
           <button class="btn" type="submit">上传内部资料</button>
           <span id="internalUploadMsg"></span>
           <div id="internalProgressWrap" class="internal-progress hidden"><span id="internalProgressBar"></span></div>
@@ -1519,6 +1536,7 @@ async function loadAdminInternalResources(){
           '</div>'+
           '<div class="actions">'+
             '<button class="mini" onclick="pinInternalResource(\\''+v.id+'\\','+Boolean(v.pinned)+')">'+(v.pinned?'取消置顶':'置顶')+'</button>'+
+            ((v.resourceKind||"")==="video"?'<button class="mini" onclick="replaceInternalCover(\\''+v.id+'\\')">更换封面</button>':'')+
             '<button class="mini primary" onclick="editInternalResource(\\''+v.id+'\\')">编辑</button>'+
             '<button class="mini" onclick="toggleInternalResource(\\''+v.id+'\\','+(v.visible!==false)+')">'+(v.visible===false?'显示':'隐藏')+'</button>'+
             '<button class="mini danger" onclick="deleteInternalResource(\\''+v.id+'\\')">删除</button>'+
@@ -1527,6 +1545,100 @@ async function loadAdminInternalResources(){
       ).join("")
       : '<p class="notice">还没有上传内部资料。</p>';
   }catch{}
+}
+
+function isVideoFile(file){
+  const mime=String(file?.type||"").toLowerCase();
+  const ext=String(file?.name||"").toLowerCase().split(".").pop();
+  return mime.startsWith("video/") || ["mp4","webm","mov","m4v","mkv"].includes(ext);
+}
+
+async function extractVideoCover(file){
+  if(!isVideoFile(file)) return null;
+
+  const objectUrl=URL.createObjectURL(file);
+  const video=document.createElement("video");
+  video.preload="metadata";
+  video.muted=true;
+  video.playsInline=true;
+  video.src=objectUrl;
+
+  try{
+    await new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>reject(new Error("读取视频超时")),15000);
+      video.onloadedmetadata=()=>{
+        clearTimeout(timer);
+        resolve();
+      };
+      video.onerror=()=>{
+        clearTimeout(timer);
+        reject(new Error("浏览器无法读取该视频格式"));
+      };
+    });
+
+    const duration=Number(video.duration||0);
+    let target=0.3;
+    if(duration>0){
+      target=Math.min(0.3,Math.max(0,duration-0.05));
+    }
+
+    await new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>reject(new Error("视频取帧超时")),15000);
+      video.onseeked=()=>{
+        clearTimeout(timer);
+        resolve();
+      };
+      video.onerror=()=>{
+        clearTimeout(timer);
+        reject(new Error("视频取帧失败"));
+      };
+      try{
+        video.currentTime=target;
+      }catch(err){
+        clearTimeout(timer);
+        reject(err);
+      }
+    });
+
+    const sourceW=video.videoWidth||1280;
+    const sourceH=video.videoHeight||720;
+    const maxW=1280;
+    const scale=Math.min(1,maxW/sourceW);
+    const canvas=document.createElement("canvas");
+    canvas.width=Math.max(1,Math.round(sourceW*scale));
+    canvas.height=Math.max(1,Math.round(sourceH*scale));
+    const ctx=canvas.getContext("2d");
+    ctx.drawImage(video,0,0,canvas.width,canvas.height);
+
+    const blob=await new Promise(resolve=>canvas.toBlob(resolve,"image/jpeg",0.84));
+    if(!blob) throw new Error("封面生成失败");
+
+    const preview=document.getElementById("internalCoverPreview");
+    const wrap=document.getElementById("internalCoverPreviewWrap");
+    if(preview&&wrap){
+      preview.src=URL.createObjectURL(blob);
+      wrap.classList.remove("hidden");
+    }
+    return blob;
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+async function uploadInternalCoverBlob(blob,baseName){
+  const prep=await fetch("/api/admin/internal-resources/cover-presign",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
+      filename:(baseName||"cover")+".jpg",
+      size:blob.size,
+      contentType:"image/jpeg"
+    })
+  });
+  const data=await prep.json().catch(()=>({}));
+  if(!prep.ok) throw new Error(data.error||"无法准备封面上传");
+  await xhrPut(data.uploadUrl,blob,"image/jpeg");
+  return data.key;
 }
 
 function xhrPut(url,blob,contentType,onProgress){
@@ -1564,12 +1676,30 @@ document.getElementById("internalUploadForm").onsubmit=async e=>{
   }
 
   let uploadState=null;
+  let coverObjectKey="";
   wrap.classList.remove("hidden");
   bar.style.width="0%";
   msg.className="notice";
   msg.textContent=" 正在准备上传...";
 
   try{
+    if(isVideoFile(file)){
+      msg.textContent=" 正在提取视频封面...";
+      try{
+        const coverBlob=await extractVideoCover(file);
+        if(coverBlob){
+          msg.textContent=" 正在上传视频封面...";
+          coverObjectKey=await uploadInternalCoverBlob(
+            coverBlob,
+            String(file.name||"video").replace(/\.[^.]+$/,"")
+          );
+        }
+      }catch(coverErr){
+        console.warn("自动封面生成失败，视频仍会继续上传：",coverErr);
+        msg.textContent=" 自动封面生成失败，继续上传视频...";
+      }
+    }
+
     const init=await fetch("/api/admin/internal-resources/upload-init",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
@@ -1671,7 +1801,8 @@ document.getElementById("internalUploadForm").onsubmit=async e=>{
         sortOrder:Number(fd.get("sortOrder")||0),
         originalName:file.name,
         size:file.size,
-        contentType:file.type||"application/octet-stream"
+        contentType:file.type||"application/octet-stream",
+        coverObjectKey
       })
     });
     const d=await done.json().catch(()=>({}));
@@ -1681,9 +1812,20 @@ document.getElementById("internalUploadForm").onsubmit=async e=>{
     msg.className="ok";
     msg.textContent=" 上传成功";
     form.reset();
+    const coverWrap=document.getElementById("internalCoverPreviewWrap");
+    const coverPreview=document.getElementById("internalCoverPreview");
+    if(coverWrap) coverWrap.classList.add("hidden");
+    if(coverPreview) coverPreview.removeAttribute("src");
     loadAdminInternalResources();
     setTimeout(()=>wrap.classList.add("hidden"),1000);
   }catch(err){
+    if(coverObjectKey){
+      fetch("/api/admin/internal-resources/cover-delete",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({coverObjectKey})
+      }).catch(()=>{});
+    }
     if(uploadState?.mode==="multipart" && uploadState?.key && uploadState?.uploadId){
       fetch("/api/admin/internal-resources/upload-abort",{
         method:"POST",
@@ -1735,6 +1877,48 @@ window.editInternalResource=async id=>{
   const d=await r.json().catch(()=>({}));
   if(!r.ok) alert(d.error||"修改失败");
   loadAdminInternalResources();
+};
+
+window.replaceInternalCover=async id=>{
+  const item=adminInternalResources.find(x=>x.id===id);
+  if(!item)return;
+
+  const input=document.createElement("input");
+  input.type="file";
+  input.accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp";
+  input.onchange=async()=>{
+    const file=input.files&&input.files[0];
+    if(!file)return;
+    try{
+      const prep=await fetch("/api/admin/internal-resources/cover-presign",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          filename:file.name,
+          size:file.size,
+          contentType:file.type||"image/jpeg"
+        })
+      });
+      const pd=await prep.json().catch(()=>({}));
+      if(!prep.ok) throw new Error(pd.error||"无法准备封面上传");
+
+      await xhrPut(pd.uploadUrl,file,file.type||"image/jpeg");
+
+      const r=await fetch("/api/admin/internal-resources/"+encodeURIComponent(id)+"/cover",{
+        method:"PATCH",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({coverObjectKey:pd.key})
+      });
+      const d=await r.json().catch(()=>({}));
+      if(!r.ok) throw new Error(d.error||"保存封面失败");
+
+      alert("封面已更新");
+      loadAdminInternalResources();
+    }catch(err){
+      alert(err?.message||"更换封面失败");
+    }
+  };
+  input.click();
 };
 
 window.deleteInternalResource=async id=>{
@@ -2089,6 +2273,7 @@ app.get("/api/internal-resources",internalAccessOnly,(req,res)=>{
     type:v.type,
     contentType:v.contentType,
     resourceKind:v.resourceKind||classifyInternalResource(v.contentType,v.originalName),
+    hasCover:Boolean(v.coverObjectKey),
     size:v.size,
     pinned:Boolean(v.pinned),
     accesses:Number(v.accesses||v.views||0),
@@ -2173,6 +2358,54 @@ app.post("/api/admin/links",adminOnly,(req,res)=>{
 });
 
 
+
+app.post("/api/admin/internal-resources/cover-presign",adminOnly,async(req,res)=>{
+  if(!BUCKET_READY){
+    return res.status(503).json({error:"Bucket 尚未连接完成"});
+  }
+
+  const filename=safeOriginalName(req.body.filename||"cover.jpg");
+  const ext=path.extname(filename).toLowerCase();
+  const allowedCover=new Set([".jpg",".jpeg",".png",".webp"]);
+  if(!allowedCover.has(ext)){
+    return res.status(400).json({error:"封面仅支持 JPG、PNG、WebP"});
+  }
+
+  const size=Number(req.body.size||0);
+  if(!Number.isFinite(size)||size<=0){
+    return res.status(400).json({error:"封面文件大小无效"});
+  }
+  if(size>20*1024*1024){
+    return res.status(400).json({error:"封面图片不能超过20MB"});
+  }
+
+  const contentType=clean(req.body.contentType,120)||"image/jpeg";
+  const key=`internal-covers/${new Date().toISOString().slice(0,10)}/${Date.now()}-${crypto.randomBytes(8).toString("hex")}${ext}`;
+
+  try{
+    const command=new PutObjectCommand({
+      Bucket:BUCKET_NAME,
+      Key:key,
+      ContentType:contentType
+    });
+    const uploadUrl=await getSignedUrl(s3,command,{expiresIn:3600});
+    res.json({ok:true,key,uploadUrl});
+  }catch(err){
+    console.error("生成内部封面上传地址失败",err);
+    res.status(500).json({error:"无法生成封面上传地址"});
+  }
+});
+
+app.post("/api/admin/internal-resources/cover-delete",adminOnly,async(req,res)=>{
+  const key=String(req.body.coverObjectKey||"");
+  if(!key.startsWith("internal-covers/")) return res.json({ok:true});
+  try{
+    if(BUCKET_READY){
+      await s3.send(new DeleteObjectCommand({Bucket:BUCKET_NAME,Key:key}));
+    }
+  }catch{}
+  res.json({ok:true});
+});
 
 app.post("/api/admin/internal-resources/upload-init",adminOnly,async(req,res)=>{
   if(!BUCKET_READY){
@@ -2340,6 +2573,7 @@ app.post("/api/admin/internal-resources/finalize",adminOnly,async(req,res)=>{
       type:ext||"FILE",
       contentType,
       resourceKind:classifyInternalResource(contentType,originalName),
+      coverObjectKey:String(req.body.coverObjectKey||"").startsWith("internal-covers/") ? String(req.body.coverObjectKey) : "",
       size:actualSize,
       accesses:0,
       visible:true,
@@ -2382,6 +2616,32 @@ app.patch("/api/admin/internal-resources/:id",adminOnly,(req,res)=>{
   res.json({ok:true,item});
 });
 
+app.patch("/api/admin/internal-resources/:id/cover",adminOnly,async(req,res)=>{
+  const items=readInternalResources();
+  const item=items.find(x=>x.id===req.params.id);
+  if(!item)return res.status(404).json({error:"内部资料不存在"});
+
+  const newKey=String(req.body.coverObjectKey||"");
+  if(!newKey.startsWith("internal-covers/")){
+    return res.status(400).json({error:"封面标识无效"});
+  }
+
+  const oldKey=String(item.coverObjectKey||"");
+  item.coverObjectKey=newKey;
+  item.updatedAt=new Date().toISOString();
+  writeInternalResources(items);
+
+  if(oldKey&&oldKey!==newKey&&BUCKET_READY){
+    try{
+      await s3.send(new DeleteObjectCommand({Bucket:BUCKET_NAME,Key:oldKey}));
+    }catch(err){
+      console.error("删除旧封面失败",err);
+    }
+  }
+
+  res.json({ok:true,item});
+});
+
 app.delete("/api/admin/internal-resources/:id",adminOnly,async(req,res)=>{
   const items=readInternalResources();
   const i=items.findIndex(x=>x.id===req.params.id);
@@ -2391,6 +2651,11 @@ app.delete("/api/admin/internal-resources/:id",adminOnly,async(req,res)=>{
   try{
     if(item.storage==="bucket"&&item.objectKey&&BUCKET_READY){
       await s3.send(new DeleteObjectCommand({Bucket:BUCKET_NAME,Key:item.objectKey}));
+    }
+    if(item.coverObjectKey&&BUCKET_READY){
+      try{
+        await s3.send(new DeleteObjectCommand({Bucket:BUCKET_NAME,Key:item.coverObjectKey}));
+      }catch{}
     }
   }catch(err){
     console.error("删除内部资料实体失败",err);
@@ -2642,6 +2907,26 @@ function markInternalAccess(id){
     writeInternalResources(items);
   }
 }
+
+app.get("/internal-resource/cover/:id",internalAccessOnly,async(req,res)=>{
+  const items=readInternalResources();
+  const item=items.find(x=>x.id===req.params.id&&x.visible!==false);
+  if(!item||!item.coverObjectKey)return res.status(404).send("封面不存在");
+  if(!BUCKET_READY)return res.status(503).send("Bucket 尚未连接");
+
+  try{
+    const command=new GetObjectCommand({
+      Bucket:BUCKET_NAME,
+      Key:item.coverObjectKey,
+      ResponseContentDisposition:"inline"
+    });
+    const url=await getSignedUrl(s3,command,{expiresIn:1800});
+    res.redirect(url);
+  }catch(err){
+    console.error("生成内部封面地址失败",err);
+    res.status(500).send("封面暂时无法显示");
+  }
+});
 
 app.get("/internal-resource/open/:id",internalAccessOnly,async(req,res)=>{
   const items=readInternalResources();
