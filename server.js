@@ -38,14 +38,17 @@ const s3 = BUCKET_READY ? new S3Client({
   }
 }) : null;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "change-me";
+const INTERNAL_VIDEO_PASSWORD = process.env.INTERNAL_VIDEO_PASSWORD || "";
 const SESSION_SECRET = process.env.SESSION_SECRET || "change-this-secret";
 const STORAGE_ROOT = process.env.STORAGE_DIR || path.join(__dirname, "storage");
 const DATA_FILE = path.join(STORAGE_ROOT, "documents.json");
 const SETTINGS_FILE = path.join(STORAGE_ROOT, "site-settings.json");
+const VIDEOS_FILE = path.join(STORAGE_ROOT, "internal-videos.json");
 const UPLOAD_DIR = path.join(STORAGE_ROOT, "uploads");
 
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, "[]", "utf8");
+if (!fs.existsSync(VIDEOS_FILE)) fs.writeFileSync(VIDEOS_FILE, "[]", "utf8");
 
 const DEFAULT_SETTINGS = {
   announcement: {
@@ -108,6 +111,13 @@ function readDocs() {
 function writeDocs(docs) {
   fs.writeFileSync(DATA_FILE, JSON.stringify(docs, null, 2), "utf8");
 }
+function readVideos() {
+  try { return JSON.parse(fs.readFileSync(VIDEOS_FILE, "utf8")); }
+  catch { return []; }
+}
+function writeVideos(videos) {
+  fs.writeFileSync(VIDEOS_FILE, JSON.stringify(videos, null, 2), "utf8");
+}
 function readSettings() {
   try {
     const current = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
@@ -133,6 +143,10 @@ function adminOnly(req, res, next) {
   if (req.session?.isAdmin) return next();
   res.status(401).json({ error: "未登录或登录已过期" });
 }
+function internalVideoOnly(req, res, next) {
+  if (req.session?.internalVideoAccess) return next();
+  res.status(401).json({ error: "未获得内部视频访问权限" });
+}
 
 function validHttpUrl(value) {
   try {
@@ -146,6 +160,10 @@ function validHttpUrl(value) {
 const allowed = new Set([
   ".pdf",".doc",".docx",".ppt",".pptx",
   ".xls",".xlsx",".zip",".rar",".7z",".txt"
+]);
+
+const allowedVideo = new Set([
+  ".mp4",".webm",".mov",".m4v"
 ]);
 
 const upload = multer({
@@ -407,6 +425,124 @@ input:focus,textarea:focus,select:focus{
   .home-search,.resource-grid{grid-template-columns:1fr}
   .home-footer{flex-direction:column}
   .admin-meta-grid,.edit-two{grid-template-columns:1fr 1fr}
+}
+
+/* ===== 内部视频中心 ===== */
+.video-page{
+  min-height:100vh;background:
+    radial-gradient(circle at 10% -10%,rgba(45,55,145,.15),transparent 28%),
+    radial-gradient(circle at 95% 8%,rgba(111,76,200,.12),transparent 25%),
+    #f5f7fb;
+}
+.video-shell{width:min(1180px,calc(100% - 32px));margin:auto;padding-bottom:40px}
+.video-nav{
+  height:76px;display:flex;align-items:center;justify-content:space-between;
+  border-bottom:1px solid rgba(228,231,236,.85)
+}
+.video-brand{display:flex;align-items:center;gap:12px;font-weight:850}
+.video-brand-mark{
+  width:40px;height:40px;border-radius:12px;display:grid;place-items:center;
+  color:#fff;background:linear-gradient(145deg,#172554,#5b50c8);font-weight:900
+}
+.video-hero{
+  margin:28px 0 20px;padding:32px 34px;border-radius:24px;color:#fff;
+  background:linear-gradient(140deg,#111c42,#2e307a 60%,#5e43b5);
+  box-shadow:0 22px 60px rgba(25,31,77,.16)
+}
+.video-hero h1{margin:6px 0 10px;font-size:clamp(30px,5vw,48px)}
+.video-hero p{margin:0;color:rgba(255,255,255,.75);line-height:1.8;font-size:14px}
+.video-toolbar{
+  display:grid;grid-template-columns:1fr 220px;gap:10px;margin:18px 0
+}
+.video-toolbar input,.video-toolbar select{min-height:48px}
+.video-grid{
+  display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:17px
+}
+.video-card{
+  overflow:hidden;border-radius:19px;background:#fff;border:1px solid #e5e7ec;
+  box-shadow:0 13px 42px rgba(16,24,40,.06);transition:.18s ease
+}
+.video-card:hover{transform:translateY(-2px);box-shadow:0 20px 52px rgba(16,24,40,.1)}
+.video-poster{
+  position:relative;aspect-ratio:16/9;display:grid;place-items:center;
+  background:
+    radial-gradient(circle at 25% 25%,rgba(124,112,255,.38),transparent 30%),
+    linear-gradient(145deg,#121936,#343778 68%,#5d4ba9);
+  color:#fff
+}
+.video-play{
+  width:58px;height:58px;border-radius:50%;display:grid;place-items:center;
+  background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.35);
+  backdrop-filter:blur(8px);font-size:24px;padding-left:4px
+}
+.video-poster-label{
+  position:absolute;left:13px;top:13px;padding:5px 8px;border-radius:999px;
+  background:rgba(7,12,28,.5);font-size:11px
+}
+.video-pin{
+  position:absolute;right:13px;top:13px;padding:5px 8px;border-radius:999px;
+  background:#fff3cd;color:#7c560c;font-size:11px;font-weight:700
+}
+.video-card-body{padding:16px}
+.video-card h3{margin:0 0 7px;font-size:16px;line-height:1.45}
+.video-card p{
+  margin:0;color:#667085;font-size:12px;line-height:1.7;min-height:41px;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden
+}
+.video-meta{
+  display:flex;justify-content:space-between;gap:10px;color:#98a2b3;
+  font-size:11px;margin-top:13px
+}
+.video-login-wrap{
+  min-height:100vh;display:grid;place-items:center;padding:24px;
+  background:
+    radial-gradient(circle at 18% 8%,rgba(70,78,190,.16),transparent 28%),
+    #f5f7fb
+}
+.video-login-card{
+  width:min(460px,100%);padding:28px;border:1px solid #e4e7ec;border-radius:22px;
+  background:#fff;box-shadow:0 24px 80px rgba(16,24,40,.1)
+}
+.video-login-card h1{margin:18px 0 8px;font-size:30px}
+.video-login-card p{color:#667085;font-size:13px;line-height:1.7}
+.video-player-mask{
+  position:fixed;inset:0;background:rgba(7,12,28,.82);backdrop-filter:blur(6px);
+  display:grid;place-items:center;padding:18px;z-index:1500
+}
+.video-player-dialog{
+  width:min(1100px,100%);background:#0b1020;border-radius:18px;overflow:hidden;
+  box-shadow:0 35px 110px rgba(0,0,0,.42)
+}
+.video-player-head{
+  min-height:58px;padding:12px 16px 12px 20px;display:flex;align-items:center;
+  justify-content:space-between;color:#fff;border-bottom:1px solid rgba(255,255,255,.1)
+}
+.video-player{display:block;width:100%;max-height:78vh;background:#000}
+.video-empty{
+  grid-column:1/-1;padding:60px 20px;text-align:center;color:#667085;
+  border:1px dashed #d0d5dd;background:#fff;border-radius:18px
+}
+
+/* ===== 后台内部视频管理 ===== */
+.video-admin-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}
+.video-admin-list{margin-top:16px}
+.video-admin-item{
+  display:grid;grid-template-columns:1fr auto;gap:18px;align-items:center;
+  padding:16px;border:1px solid #e4e7ec;border-radius:14px;margin-top:10px
+}
+.video-admin-item h3{margin:0 0 6px;font-size:16px}
+.video-admin-item p{margin:0;color:#98a2b3;font-size:12px}
+.video-progress{
+  height:8px;background:#eef0f5;border-radius:999px;overflow:hidden;margin-top:9px
+}
+.video-progress > span{
+  display:block;height:100%;width:0;background:linear-gradient(90deg,#5b5ff0,#8b5cf6)
+}
+@media(max-width:900px){.video-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:620px){
+  .video-grid,.video-toolbar{grid-template-columns:1fr}
+  .video-admin-item{grid-template-columns:1fr}
+  .video-hero{padding:26px 22px}
 }
 
 /* admin */
@@ -687,6 +823,173 @@ document.getElementById("cat").onchange=render;
 </body>
 </html>`;
 
+const internalVideoHtml = `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>人民邮电出版社｜内部视频中心</title>
+<style>${css}</style>
+</head>
+<body>
+
+<div id="videoLogin" class="video-login-wrap">
+  <section class="video-login-card">
+    <div class="video-brand"><span class="video-brand-mark">邮</span>人民邮电出版社</div>
+    <h1>内部视频中心</h1>
+    <p>本页面仅供内部人员查看。请输入内部访问密码进入视频库。</p>
+    <form id="videoLoginForm">
+      <input id="videoPassword" type="password" placeholder="内部访问密码" required>
+      <button class="btn" style="width:100%;margin-top:12px">进入视频中心</button>
+      <div id="videoLoginMsg"></div>
+    </form>
+  </section>
+</div>
+
+<div id="videoLibrary" class="video-page hidden">
+  <div class="video-shell">
+    <nav class="video-nav">
+      <div class="video-brand"><span class="video-brand-mark">邮</span>内部视频中心</div>
+      <button id="videoLogout" class="mini">退出内部中心</button>
+    </nav>
+
+    <header class="video-hero">
+      <div class="tag" style="background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.18);color:#fff">仅限内部访问</div>
+      <h1>人民邮电出版社｜内部视频中心</h1>
+      <p>内部培训、课程案例与操作视频统一管理。点击任意视频即可在线播放。</p>
+    </header>
+
+    <div class="video-toolbar">
+      <input id="videoSearch" placeholder="搜索视频标题、分类或简介">
+      <select id="videoCategory"><option value="">全部分类</option></select>
+    </div>
+
+    <main id="videoGrid" class="video-grid"></main>
+  </div>
+</div>
+
+<div id="videoPlayerMask" class="video-player-mask hidden">
+  <div class="video-player-dialog">
+    <div class="video-player-head">
+      <strong id="videoPlayerTitle">视频播放</strong>
+      <button id="videoPlayerClose" class="close-btn" type="button">×</button>
+    </div>
+    <video id="videoPlayer" class="video-player" controls playsinline preload="metadata"></video>
+  </div>
+</div>
+
+<script>
+const VE=s=>String(s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));
+let internalVideos=[];
+
+async function videoAuthState(){
+  try{
+    const r=await fetch("/api/internal-video/me");
+    const d=await r.json();
+    document.getElementById("videoLogin").classList.toggle("hidden",d.authorized);
+    document.getElementById("videoLibrary").classList.toggle("hidden",!d.authorized);
+    if(d.authorized) loadInternalVideos();
+  }catch{}
+}
+
+document.getElementById("videoLoginForm").onsubmit=async e=>{
+  e.preventDefault();
+  const m=document.getElementById("videoLoginMsg");
+  m.className="notice";
+  m.textContent="正在验证...";
+  try{
+    const r=await fetch("/api/internal-video/login",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({password:document.getElementById("videoPassword").value})
+    });
+    const d=await r.json().catch(()=>({}));
+    if(r.ok){
+      m.className="ok";
+      m.textContent="验证成功";
+      document.getElementById("videoPassword").value="";
+      videoAuthState();
+    }else{
+      m.className="err";
+      m.textContent=d.error||"密码错误";
+    }
+  }catch{
+    m.className="err";
+    m.textContent="验证请求失败，请稍后重试";
+  }
+};
+
+document.getElementById("videoLogout").onclick=async()=>{
+  await fetch("/api/internal-video/logout",{method:"POST"});
+  closeVideoPlayer();
+  videoAuthState();
+};
+
+function vd(v){
+  const d=new Date(v||"");
+  if(Number.isNaN(d.getTime())) return "—";
+  return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+}
+
+function videoCard(v){
+  return '<article class="video-card" onclick="openVideoPlayer(\\''+v.id+'\\',\\''+VE(v.title).replace(/'/g,"&#39;")+'\\')">'+
+    '<div class="video-poster">'+
+      '<span class="video-poster-label">'+VE(v.category||"内部视频")+'</span>'+
+      (v.pinned?'<span class="video-pin">置顶</span>':'')+
+      '<span class="video-play">▶</span>'+
+    '</div>'+
+    '<div class="video-card-body">'+
+      '<h3>'+VE(v.title||"未命名视频")+'</h3>'+
+      '<p>'+VE(v.description||"暂无简介")+'</p>'+
+      '<div class="video-meta"><span>'+vd(v.updatedAt||v.createdAt)+'</span><span>播放 '+Number(v.views||0)+' 次</span></div>'+
+    '</div>'+
+  '</article>';
+}
+
+function renderInternalVideos(){
+  const q=document.getElementById("videoSearch").value.toLowerCase().trim();
+  const c=document.getElementById("videoCategory").value;
+  const arr=internalVideos.filter(v=>
+    (!q||(String(v.title||"")+" "+String(v.description||"")+" "+String(v.category||"")).toLowerCase().includes(q)) &&
+    (!c||v.category===c)
+  );
+  document.getElementById("videoGrid").innerHTML=arr.length?arr.map(videoCard).join(""):'<div class="video-empty">暂时没有符合条件的视频</div>';
+}
+
+async function loadInternalVideos(){
+  const r=await fetch("/api/internal-videos");
+  if(r.status===401) return videoAuthState();
+  internalVideos=await r.json();
+  const cats=[...new Set(internalVideos.map(v=>v.category).filter(Boolean))];
+  document.getElementById("videoCategory").innerHTML='<option value="">全部分类</option>'+cats.map(c=>'<option>'+VE(c)+'</option>').join("");
+  renderInternalVideos();
+}
+
+window.openVideoPlayer=(id,title)=>{
+  const player=document.getElementById("videoPlayer");
+  document.getElementById("videoPlayerTitle").textContent=title||"视频播放";
+  player.src="/internal-video/stream/"+encodeURIComponent(id);
+  document.getElementById("videoPlayerMask").classList.remove("hidden");
+  player.play().catch(()=>{});
+};
+
+function closeVideoPlayer(){
+  const player=document.getElementById("videoPlayer");
+  player.pause();
+  player.removeAttribute("src");
+  player.load();
+  document.getElementById("videoPlayerMask").classList.add("hidden");
+}
+document.getElementById("videoPlayerClose").onclick=closeVideoPlayer;
+document.getElementById("videoPlayerMask").addEventListener("click",e=>{if(e.target.id==="videoPlayerMask")closeVideoPlayer()});
+document.getElementById("videoSearch").oninput=renderInternalVideos;
+document.getElementById("videoCategory").onchange=renderInternalVideos;
+
+videoAuthState();
+</script>
+</body>
+</html>`;
+
 const adminHtml = `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -861,6 +1164,54 @@ const adminHtml = `<!doctype html>
     </section>
 
     <section class="panel">
+      <div class="video-admin-head">
+        <div>
+          <h2 style="margin:0 0 5px">内部视频管理</h2>
+          <div class="notice">这里上传的视频只会出现在密码保护的内部视频中心，不会显示在公开资料首页。</div>
+        </div>
+        <a class="mini primary" href="/videos" target="_blank">打开内部视频中心</a>
+      </div>
+
+      <form id="videoUploadForm" class="form" style="margin-top:18px">
+        <div>
+          <label>视频标题</label>
+          <input name="title" placeholder="例如：AI漫剧内部培训01" required>
+        </div>
+        <div>
+          <label>分类</label>
+          <input name="category" placeholder="例如：内部培训" required>
+        </div>
+        <div>
+          <label>排序值</label>
+          <input name="sortOrder" type="number" value="0" placeholder="数字越大越靠前">
+        </div>
+        <div>
+          <label>视频文件</label>
+          <input name="file" type="file" accept=".mp4,.webm,.mov,.m4v,video/*" required>
+        </div>
+        <div class="full">
+          <label>简介</label>
+          <textarea name="description" placeholder="填写视频简介"></textarea>
+        </div>
+        <div class="full">
+          <p class="notice">推荐 MP4（H.264 + AAC）。单文件最大 ${MAX_UPLOAD_MB}MB，直接上传到 Railway Bucket。</p>
+          <button class="btn" type="submit">上传内部视频</button>
+          <span id="videoUploadMsg"></span>
+          <div id="videoProgressWrap" class="video-progress hidden"><span id="videoProgressBar"></span></div>
+        </div>
+      </form>
+
+      <div class="row" style="margin-top:24px">
+        <div>
+          <strong>已添加视频</strong>
+          <div class="notice">可置顶、修改信息、排序、隐藏或删除。</div>
+        </div>
+        <span id="videoAdminCount" class="notice"></span>
+      </div>
+      <div id="videoAdminList" class="video-admin-list"></div>
+    </section>
+
+    <section class="panel">
       <div class="row">
         <div>
           <h2 style="margin-bottom:4px">已上传资料</h2>
@@ -953,6 +1304,7 @@ async function auth(){
   if(d.isAdmin){
     load();
     loadSiteSettings();
+    loadAdminVideos();
   }
 }
 
@@ -1099,6 +1451,169 @@ async function loadSiteSettings(){
     document.getElementById("submissionContentInput").value=sub.content||"";
   }catch{}
 }
+
+
+let adminVideos=[];
+
+async function loadAdminVideos(){
+  try{
+    const r=await fetch("/api/admin/videos");
+    if(r.status===401) return auth();
+    adminVideos=await r.json();
+    document.getElementById("videoAdminCount").textContent="共 "+adminVideos.length+" 个";
+    document.getElementById("videoAdminList").innerHTML=adminVideos.length
+      ? adminVideos.map(v=>
+        '<div class="video-admin-item">'+
+          '<div>'+
+            '<h3>'+E(v.title)+(v.pinned?' <span class="badge" style="background:#fff3cd;color:#8a6116">已置顶</span>':'')+(v.visible===false?' <span class="badge">已隐藏</span>':'')+'</h3>'+
+            '<p>'+E(v.category||"内部视频")+' · '+E(v.type||"VIDEO")+' · 播放 '+Number(v.views||0)+' 次 · 排序 '+Number(v.sortOrder||0)+'</p>'+
+            '<div class="admin-desc">'+E(v.description||"暂无简介")+'</div>'+
+          '</div>'+
+          '<div class="actions">'+
+            '<button class="mini" onclick="pinVideo(\\''+v.id+'\\','+Boolean(v.pinned)+')">'+(v.pinned?'取消置顶':'置顶')+'</button>'+
+            '<button class="mini primary" onclick="editVideo(\\''+v.id+'\\')">编辑</button>'+
+            '<button class="mini" onclick="toggleVideo(\\''+v.id+'\\','+(v.visible!==false)+')">'+(v.visible===false?'显示':'隐藏')+'</button>'+
+            '<button class="mini danger" onclick="deleteVideo(\\''+v.id+'\\')">删除</button>'+
+          '</div>'+
+        '</div>'
+      ).join("")
+      : '<p class="notice">还没有上传内部视频。</p>';
+  }catch{}
+}
+
+document.getElementById("videoUploadForm").onsubmit=async e=>{
+  e.preventDefault();
+  const form=e.target;
+  const fd=new FormData(form);
+  const file=fd.get("file");
+  const msg=document.getElementById("videoUploadMsg");
+  const wrap=document.getElementById("videoProgressWrap");
+  const bar=document.getElementById("videoProgressBar");
+
+  if(!file || !file.name){
+    msg.className="err";
+    msg.textContent=" 请选择视频文件";
+    return;
+  }
+
+  msg.className="notice";
+  msg.textContent=" 正在准备上传...";
+  wrap.classList.remove("hidden");
+  bar.style.width="0%";
+
+  try{
+    const prep=await fetch("/api/admin/videos/presign",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({
+        filename:file.name,
+        size:file.size,
+        contentType:file.type||"application/octet-stream"
+      })
+    });
+    const p=await prep.json().catch(()=>({}));
+    if(!prep.ok) throw new Error(p.error||"无法准备上传");
+
+    await new Promise((resolve,reject)=>{
+      const xhr=new XMLHttpRequest();
+      xhr.open("PUT",p.uploadUrl,true);
+      if(file.type) xhr.setRequestHeader("Content-Type",file.type);
+      xhr.upload.onprogress=ev=>{
+        if(ev.lengthComputable){
+          const pct=Math.round(ev.loaded/ev.total*100);
+          bar.style.width=pct+"%";
+          msg.textContent=" 正在上传 "+pct+"%";
+        }
+      };
+      xhr.onload=()=>xhr.status>=200&&xhr.status<300?resolve():reject(new Error("Bucket 上传失败，HTTP "+xhr.status));
+      xhr.onerror=()=>reject(new Error("网络上传失败"));
+      xhr.send(file);
+    });
+
+    msg.textContent=" 正在保存视频信息...";
+
+    const done=await fetch("/api/admin/videos/complete",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({
+        key:p.key,
+        title:fd.get("title"),
+        category:fd.get("category"),
+        description:fd.get("description"),
+        sortOrder:Number(fd.get("sortOrder")||0),
+        originalName:file.name,
+        size:file.size,
+        contentType:file.type||"application/octet-stream"
+      })
+    });
+    const d=await done.json().catch(()=>({}));
+    if(!done.ok) throw new Error(d.error||"保存视频信息失败");
+
+    msg.className="ok";
+    msg.textContent=" 上传成功";
+    bar.style.width="100%";
+    form.reset();
+    loadAdminVideos();
+    setTimeout(()=>wrap.classList.add("hidden"),900);
+  }catch(err){
+    msg.className="err";
+    msg.textContent=" "+(err?.message||"上传失败");
+  }
+};
+
+window.pinVideo=async(id,pinned)=>{
+  await fetch("/api/admin/videos/"+encodeURIComponent(id),{
+    method:"PATCH",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({pinned:!pinned})
+  });
+  loadAdminVideos();
+};
+
+window.toggleVideo=async(id,visible)=>{
+  await fetch("/api/admin/videos/"+encodeURIComponent(id),{
+    method:"PATCH",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({visible:!visible})
+  });
+  loadAdminVideos();
+};
+
+window.editVideo=async id=>{
+  const v=adminVideos.find(x=>x.id===id);
+  if(!v) return;
+  const title=prompt("视频标题",v.title||"");
+  if(title===null) return;
+  const category=prompt("分类",v.category||"内部视频");
+  if(category===null) return;
+  const description=prompt("简介",v.description||"");
+  if(description===null) return;
+  const sortOrder=prompt("排序值（数字越大越靠前）",String(v.sortOrder||0));
+  if(sortOrder===null) return;
+
+  const r=await fetch("/api/admin/videos/"+encodeURIComponent(id),{
+    method:"PATCH",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
+      title,
+      category,
+      description,
+      sortOrder:Number(sortOrder||0)
+    })
+  });
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok) alert(d.error||"修改失败");
+  loadAdminVideos();
+};
+
+window.deleteVideo=async id=>{
+  if(!confirm("确定删除这个内部视频吗？删除后 Bucket 中的视频文件也会一起删除。")) return;
+  const r=await fetch("/api/admin/videos/"+encodeURIComponent(id),{method:"DELETE"});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok) alert(d.error||"删除失败");
+  loadAdminVideos();
+};
+
 
 document.getElementById("announcementForm").onsubmit=async e=>{
   e.preventDefault();
@@ -1347,6 +1862,7 @@ auth();
 
 app.get("/", (_,res)=>res.type("html").send(homeHtml));
 app.get("/admin.html", (_,res)=>res.type("html").send(adminHtml));
+app.get("/videos", (_,res)=>res.type("html").send(internalVideoHtml));
 
 app.post("/api/login",(req,res)=>{
   if(String(req.body.password||"")===ADMIN_PASSWORD){
@@ -1362,6 +1878,27 @@ app.post("/api/logout",(req,res)=>{
 
 app.get("/api/me",(req,res)=>{
   res.json({isAdmin:Boolean(req.session?.isAdmin)});
+});
+
+
+app.get("/api/internal-video/me",(req,res)=>{
+  res.json({authorized:Boolean(req.session?.internalVideoAccess)});
+});
+
+app.post("/api/internal-video/login",(req,res)=>{
+  if(!INTERNAL_VIDEO_PASSWORD){
+    return res.status(503).json({error:"内部视频密码尚未配置"});
+  }
+  if(String(req.body.password||"")===INTERNAL_VIDEO_PASSWORD){
+    req.session.internalVideoAccess=true;
+    return res.json({ok:true});
+  }
+  res.status(401).json({error:"密码错误"});
+});
+
+app.post("/api/internal-video/logout",(req,res)=>{
+  if(req.session) req.session.internalVideoAccess=false;
+  res.json({ok:true});
 });
 
 
@@ -1397,6 +1934,43 @@ app.patch("/api/admin/site-settings",adminOnly,(req,res)=>{
 
   writeSettings(s);
   res.json({ok:true,settings:s});
+});
+
+
+app.get("/api/internal-videos",internalVideoOnly,(req,res)=>{
+  const videos=readVideos()
+    .filter(v=>v.visible!==false)
+    .sort((a,b)=>{
+      const pinDiff=Number(Boolean(b.pinned))-Number(Boolean(a.pinned));
+      if(pinDiff!==0) return pinDiff;
+      const sortDiff=Number(b.sortOrder||0)-Number(a.sortOrder||0);
+      if(sortDiff!==0) return sortDiff;
+      return String(b.updatedAt||b.createdAt||"").localeCompare(String(a.updatedAt||a.createdAt||""));
+    });
+  res.json(videos.map(v=>({
+    id:v.id,
+    title:v.title,
+    category:v.category,
+    description:v.description,
+    type:v.type,
+    size:v.size,
+    pinned:Boolean(v.pinned),
+    views:Number(v.views||0),
+    createdAt:v.createdAt,
+    updatedAt:v.updatedAt
+  })));
+});
+
+app.get("/api/admin/videos",adminOnly,(req,res)=>{
+  res.json(
+    readVideos().sort((a,b)=>{
+      const pinDiff=Number(Boolean(b.pinned))-Number(Boolean(a.pinned));
+      if(pinDiff!==0) return pinDiff;
+      const sortDiff=Number(b.sortOrder||0)-Number(a.sortOrder||0);
+      if(sortDiff!==0) return sortDiff;
+      return String(b.updatedAt||b.createdAt||"").localeCompare(String(a.updatedAt||a.createdAt||""));
+    })
+  );
 });
 
 app.get("/api/documents",(req,res)=>{
@@ -1462,6 +2036,137 @@ app.post("/api/admin/links",adminOnly,(req,res)=>{
   res.json({ok:true,document:doc});
 });
 
+
+
+app.post("/api/admin/videos/presign",adminOnly,async(req,res)=>{
+  if(!BUCKET_READY){
+    return res.status(503).json({error:"Bucket 尚未连接完成"});
+  }
+
+  const filename=safeOriginalName(req.body.filename);
+  const size=Number(req.body.size||0);
+  const ext=path.extname(filename).toLowerCase();
+
+  if(!allowedVideo.has(ext)){
+    return res.status(400).json({error:"视频仅支持 MP4、WebM、MOV、M4V"});
+  }
+  if(!Number.isFinite(size)||size<=0){
+    return res.status(400).json({error:"文件大小无效"});
+  }
+  if(size>MAX_UPLOAD_MB*1024*1024){
+    return res.status(400).json({error:`单个视频不能超过${MAX_UPLOAD_MB}MB`});
+  }
+
+  const key=`internal-videos/${new Date().toISOString().slice(0,10)}/${Date.now()}-${crypto.randomBytes(8).toString("hex")}${ext}`;
+  try{
+    const command=new PutObjectCommand({
+      Bucket:BUCKET_NAME,
+      Key:key,
+      ContentType:clean(req.body.contentType,120)||"application/octet-stream"
+    });
+    const uploadUrl=await getSignedUrl(s3,command,{expiresIn:3600});
+    res.json({ok:true,key,uploadUrl});
+  }catch(err){
+    console.error("生成内部视频上传地址失败",err);
+    res.status(500).json({error:"无法生成视频上传地址"});
+  }
+});
+
+app.post("/api/admin/videos/complete",adminOnly,async(req,res)=>{
+  if(!BUCKET_READY){
+    return res.status(503).json({error:"Bucket 尚未连接完成"});
+  }
+
+  const key=String(req.body.key||"").trim();
+  const originalName=safeOriginalName(req.body.originalName);
+  const declaredSize=Number(req.body.size||0);
+
+  if(!key.startsWith("internal-videos/")){
+    return res.status(400).json({error:"视频文件标识无效"});
+  }
+
+  try{
+    const head=await s3.send(new HeadObjectCommand({Bucket:BUCKET_NAME,Key:key}));
+    const actualSize=Number(head.ContentLength||0);
+    if(!actualSize) return res.status(400).json({error:"Bucket 中未找到视频文件"});
+    if(declaredSize&&actualSize!==declaredSize){
+      return res.status(400).json({error:"视频大小校验失败，请重新上传"});
+    }
+
+    const videos=readVideos();
+    const ext=path.extname(originalName).replace(".","").toUpperCase();
+    const now=new Date().toISOString();
+
+    const video={
+      id:crypto.randomUUID(),
+      storage:"bucket",
+      objectKey:key,
+      title:clean(req.body.title,120)||originalName,
+      category:clean(req.body.category,60)||"内部视频",
+      description:clean(req.body.description,1000),
+      originalName,
+      type:ext||"VIDEO",
+      contentType:clean(head.ContentType||req.body.contentType,120)||"application/octet-stream",
+      size:actualSize,
+      views:0,
+      visible:true,
+      pinned:false,
+      sortOrder:Number(req.body.sortOrder||0),
+      createdAt:now,
+      updatedAt:now
+    };
+
+    videos.push(video);
+    writeVideos(videos);
+    res.json({ok:true,video});
+  }catch(err){
+    console.error("确认内部视频上传失败",err);
+    res.status(500).json({error:"确认视频上传失败，请稍后重试"});
+  }
+});
+
+app.patch("/api/admin/videos/:id",adminOnly,(req,res)=>{
+  const videos=readVideos();
+  const v=videos.find(x=>x.id===req.params.id);
+  if(!v) return res.status(404).json({error:"视频不存在"});
+
+  if("title" in req.body){
+    const title=clean(req.body.title,120);
+    if(!title) return res.status(400).json({error:"视频标题不能为空"});
+    v.title=title;
+  }
+  if("category" in req.body) v.category=clean(req.body.category,60)||"内部视频";
+  if("description" in req.body) v.description=clean(req.body.description,1000);
+  if("visible" in req.body) v.visible=Boolean(req.body.visible);
+  if("pinned" in req.body) v.pinned=Boolean(req.body.pinned);
+  if("sortOrder" in req.body){
+    const n=Number(req.body.sortOrder||0);
+    v.sortOrder=Number.isFinite(n)?n:0;
+  }
+  v.updatedAt=new Date().toISOString();
+  writeVideos(videos);
+  res.json({ok:true,video:v});
+});
+
+app.delete("/api/admin/videos/:id",adminOnly,async(req,res)=>{
+  const videos=readVideos();
+  const i=videos.findIndex(x=>x.id===req.params.id);
+  if(i<0) return res.status(404).json({error:"视频不存在"});
+  const v=videos[i];
+
+  try{
+    if(v.storage==="bucket"&&v.objectKey&&BUCKET_READY){
+      await s3.send(new DeleteObjectCommand({Bucket:BUCKET_NAME,Key:v.objectKey}));
+    }
+  }catch(err){
+    console.error("删除内部视频实体失败",err);
+    return res.status(500).json({error:"删除视频文件失败，请稍后重试"});
+  }
+
+  videos.splice(i,1);
+  writeVideos(videos);
+  res.json({ok:true});
+});
 
 app.post("/api/admin/uploads/presign",adminOnly,async(req,res)=>{
   if(!BUCKET_READY){
@@ -1692,6 +2397,30 @@ app.get("/go/:id",(req,res)=>{
   writeDocs(docs);
 
   res.redirect(url);
+});
+
+
+app.get("/internal-video/stream/:id",internalVideoOnly,async(req,res)=>{
+  const videos=readVideos();
+  const v=videos.find(x=>x.id===req.params.id&&x.visible!==false);
+  if(!v) return res.status(404).send("视频不存在");
+  if(!BUCKET_READY) return res.status(503).send("Bucket 尚未连接");
+
+  try{
+    const command=new GetObjectCommand({
+      Bucket:BUCKET_NAME,
+      Key:v.objectKey,
+      ResponseContentDisposition:"inline"
+    });
+    const url=await getSignedUrl(s3,command,{expiresIn:1800});
+
+    v.views=Number(v.views||0)+1;
+    writeVideos(videos);
+    res.redirect(url);
+  }catch(err){
+    console.error("生成内部视频播放地址失败",err);
+    res.status(500).send("视频暂时无法播放");
+  }
 });
 
 app.get("/preview/:id",async(req,res)=>{
