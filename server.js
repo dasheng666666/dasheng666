@@ -1223,7 +1223,10 @@ const adminHtml = `<!doctype html>
           <h2 style="margin:0 0 5px">内部资料管理</h2>
           <div class="notice">仅供内部密码页面使用，不会显示在公开首页。支持视频、图片、文档、压缩包、音频及其他文件。</div>
         </div>
-        <a class="mini primary" href="/internal" target="_blank">打开内部资料中心</a>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button id="backfillCoversBtn" class="mini" type="button">一键补齐视频封面</button>
+          <a class="mini primary" href="/internal" target="_blank">打开内部资料中心</a>
+        </div>
       </div>
 
       <form id="internalUploadForm" class="form" style="margin-top:18px">
@@ -1536,7 +1539,7 @@ async function loadAdminInternalResources(){
           '</div>'+
           '<div class="actions">'+
             '<button class="mini" onclick="pinInternalResource(\\''+v.id+'\\','+Boolean(v.pinned)+')">'+(v.pinned?'取消置顶':'置顶')+'</button>'+
-            ((v.resourceKind||"")==="video"?'<button class="mini" onclick="replaceInternalCover(\\''+v.id+'\\')">更换封面</button>':'')+
+            ((v.resourceKind||"")==="video"?'<button class="mini" onclick="'+(v.coverObjectKey?'replaceInternalCover':'generateInternalCover')+'(\\''+v.id+'\\')">'+(v.coverObjectKey?'更换封面':'生成封面')+'</button>':'')+
             '<button class="mini primary" onclick="editInternalResource(\\''+v.id+'\\')">编辑</button>'+
             '<button class="mini" onclick="toggleInternalResource(\\''+v.id+'\\','+(v.visible!==false)+')">'+(v.visible===false?'显示':'隐藏')+'</button>'+
             '<button class="mini danger" onclick="deleteInternalResource(\\''+v.id+'\\')">删除</button>'+
@@ -1877,6 +1880,144 @@ window.editInternalResource=async id=>{
   const d=await r.json().catch(()=>({}));
   if(!r.ok) alert(d.error||"修改失败");
   loadAdminInternalResources();
+};
+
+async function extractCoverFromVideoUrl(url){
+  const video=document.createElement("video");
+  video.preload="metadata";
+  video.muted=true;
+  video.playsInline=true;
+  video.crossOrigin="anonymous";
+  video.src=url;
+
+  try{
+    await new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>reject(new Error("读取视频超时")),30000);
+      video.onloadedmetadata=()=>{
+        clearTimeout(timer);
+        resolve();
+      };
+      video.onerror=()=>{
+        clearTimeout(timer);
+        reject(new Error("浏览器无法读取这个视频"));
+      };
+    });
+
+    const duration=Number(video.duration||0);
+    const target=duration>0 ? Math.min(0.3,Math.max(0,duration-0.05)) : 0;
+
+    await new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>reject(new Error("视频取帧超时")),30000);
+      video.onseeked=()=>{
+        clearTimeout(timer);
+        resolve();
+      };
+      video.onerror=()=>{
+        clearTimeout(timer);
+        reject(new Error("视频取帧失败"));
+      };
+      try{
+        video.currentTime=target;
+      }catch(err){
+        clearTimeout(timer);
+        reject(err);
+      }
+    });
+
+    const sourceW=video.videoWidth||1280;
+    const sourceH=video.videoHeight||720;
+    const maxW=1280;
+    const scale=Math.min(1,maxW/sourceW);
+    const canvas=document.createElement("canvas");
+    canvas.width=Math.max(1,Math.round(sourceW*scale));
+    canvas.height=Math.max(1,Math.round(sourceH*scale));
+    const ctx=canvas.getContext("2d");
+    ctx.drawImage(video,0,0,canvas.width,canvas.height);
+
+    const blob=await new Promise(resolve=>canvas.toBlob(resolve,"image/jpeg",0.84));
+    if(!blob) throw new Error("封面生成失败");
+    return blob;
+  } finally {
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+  }
+}
+
+async function createCoverForExistingItem(item,quiet=false){
+  if(!item || (item.resourceKind||"")!=="video"){
+    throw new Error("这不是视频资料");
+  }
+
+  const sourceResp=await fetch("/api/admin/internal-resources/"+encodeURIComponent(item.id)+"/source-url");
+  const sourceData=await sourceResp.json().catch(()=>({}));
+  if(!sourceResp.ok) throw new Error(sourceData.error||"无法读取原视频");
+
+  const blob=await extractCoverFromVideoUrl(sourceData.url);
+  const newKey=await uploadInternalCoverBlob(blob,String(item.originalName||item.title||"video").replace(/\.[^.]+$/,""));
+
+  const save=await fetch("/api/admin/internal-resources/"+encodeURIComponent(item.id)+"/cover",{
+    method:"PATCH",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({coverObjectKey:newKey})
+  });
+  const saved=await save.json().catch(()=>({}));
+  if(!save.ok){
+    fetch("/api/admin/internal-resources/cover-delete",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({coverObjectKey:newKey})
+    }).catch(()=>{});
+    throw new Error(saved.error||"保存封面失败");
+  }
+
+  if(!quiet) alert("视频封面已自动生成");
+}
+
+window.generateInternalCover=async id=>{
+  const item=adminInternalResources.find(x=>x.id===id);
+  if(!item)return;
+  try{
+    await createCoverForExistingItem(item,false);
+    loadAdminInternalResources();
+  }catch(err){
+    alert(err?.message||"自动生成封面失败");
+  }
+};
+
+document.getElementById("backfillCoversBtn").onclick=async()=>{
+  const btn=document.getElementById("backfillCoversBtn");
+  const missing=adminInternalResources.filter(v=>(v.resourceKind||"")==="video"&&!v.coverObjectKey);
+
+  if(!missing.length){
+    alert("当前所有视频都已经有封面");
+    return;
+  }
+
+  if(!confirm("检测到 "+missing.length+" 个视频缺少封面。将逐个从 Bucket 读取视频并自动截取约0.3秒画面，是否继续？")) return;
+
+  btn.disabled=true;
+  const oldText=btn.textContent;
+  let success=0,failed=0;
+
+  try{
+    for(let i=0;i<missing.length;i++){
+      btn.textContent="生成封面 "+(i+1)+"/"+missing.length;
+      try{
+        await createCoverForExistingItem(missing[i],true);
+        success++;
+      }catch(err){
+        console.warn("封面生成失败：",missing[i].title,err);
+        failed++;
+      }
+    }
+  }finally{
+    btn.disabled=false;
+    btn.textContent=oldText;
+    await loadAdminInternalResources();
+  }
+
+  alert("封面补齐完成：成功 "+success+" 个，失败 "+failed+" 个。");
 };
 
 window.replaceInternalCover=async id=>{
@@ -2283,8 +2424,12 @@ app.get("/api/internal-resources",internalAccessOnly,(req,res)=>{
 });
 
 app.get("/api/admin/internal-resources",adminOnly,(req,res)=>{
+  const items=readInternalResources().map(v=>({
+    ...v,
+    resourceKind:v.resourceKind||classifyInternalResource(v.contentType,v.originalName)
+  }));
   res.json(
-    readInternalResources().sort((a,b)=>{
+    items.sort((a,b)=>{
       const pinDiff=Number(Boolean(b.pinned))-Number(Boolean(a.pinned));
       if(pinDiff!==0)return pinDiff;
       const sortDiff=Number(b.sortOrder||0)-Number(a.sortOrder||0);
@@ -2614,6 +2759,30 @@ app.patch("/api/admin/internal-resources/:id",adminOnly,(req,res)=>{
   item.updatedAt=new Date().toISOString();
   writeInternalResources(items);
   res.json({ok:true,item});
+});
+
+app.get("/api/admin/internal-resources/:id/source-url",adminOnly,async(req,res)=>{
+  const items=readInternalResources();
+  const item=items.find(x=>x.id===req.params.id);
+  if(!item)return res.status(404).json({error:"内部资料不存在"});
+  if((item.resourceKind||classifyInternalResource(item.contentType,item.originalName))!=="video"){
+    return res.status(400).json({error:"这不是视频资料"});
+  }
+  if(!BUCKET_READY)return res.status(503).json({error:"Bucket 尚未连接"});
+
+  try{
+    const command=new GetObjectCommand({
+      Bucket:BUCKET_NAME,
+      Key:item.objectKey,
+      ResponseContentDisposition:"inline",
+      ResponseContentType:item.contentType||"video/mp4"
+    });
+    const url=await getSignedUrl(s3,command,{expiresIn:1800});
+    res.json({ok:true,url});
+  }catch(err){
+    console.error("生成原视频临时地址失败",err);
+    res.status(500).json({error:"暂时无法读取原视频"});
+  }
 });
 
 app.patch("/api/admin/internal-resources/:id/cover",adminOnly,async(req,res)=>{
